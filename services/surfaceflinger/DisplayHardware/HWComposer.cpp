@@ -188,7 +188,8 @@ HWComposer::HWComposer(
       mFbDev(0), mHwc(0), mNumDisplays(1),
       mCBContext(new cb_context),
       mEventHandler(handler),
-      mDebugForceFakeVSync(false)
+      mDebugForceFakeVSync(false),
+      mVDSEnabled(false)
 {
     for (size_t i =0 ; i<MAX_HWC_DISPLAYS ; i++) {
         mLists[i] = 0;
@@ -304,6 +305,15 @@ HWComposer::HWComposer(
         for (size_t i =0 ; i<NUM_BUILTIN_DISPLAYS ; i++) {
             queryDisplayProperties(i);
         }
+    }
+
+    // read system property for VDS solution
+    // This property is expected to be setup once during bootup
+    if( (property_get("persist.hwc.enable_vds", value, NULL) > 0) &&
+        ((!strncmp(value, "1", strlen("1"))) ||
+        !strncasecmp(value, "true", strlen("true")))) {
+        //HAL virtual display is using VDS based implementation
+        mVDSEnabled = true;
     }
 
     if (needVSyncThread) {
@@ -808,6 +818,11 @@ status_t HWComposer::prepare() {
                     if (l.compositionType == HWC_FRAMEBUFFER) {
                         disp.hasFbComp = true;
                     }
+                    // If the composition type is BLIT, we set this to
+                    // trigger a FLIP
+                    if(l.compositionType == HWC_BLIT) {
+                        disp.hasFbComp = true;
+                    }
                     if (l.compositionType == HWC_OVERLAY) {
                         disp.hasOvComp = true;
                     }
@@ -1127,6 +1142,11 @@ public:
         SharedBuffer const* sb = reg.getSharedBuffer(&visibleRegion.numRects);
         visibleRegion.rects = reinterpret_cast<hwc_rect_t const *>(sb->data());
     }
+#ifdef QCOM_BSP
+    virtual void setDirtyRect(const Rect& dirtyRect) {
+        // Unimplemented
+    }
+#endif
     virtual void setBuffer(const sp<GraphicBuffer>& buffer) {
         if (buffer == 0 || buffer->handle == 0) {
             getLayer()->compositionType = HWC_FRAMEBUFFER;
@@ -1249,6 +1269,22 @@ public:
         SharedBuffer const* sb = reg.getSharedBuffer(&visibleRegion.numRects);
         visibleRegion.rects = reinterpret_cast<hwc_rect_t const *>(sb->data());
     }
+#ifdef QCOM_BSP
+    virtual void setDirtyRect(const Rect& dirtyRect) {
+        Rect srcCrop;
+        srcCrop.left = int(ceilf(getLayer()->sourceCropf.left));
+        srcCrop.right = int(ceilf(getLayer()->sourceCropf.right));
+        srcCrop.top = int(ceilf(getLayer()->sourceCropf.top));
+        srcCrop.bottom = int(ceilf(getLayer()->sourceCropf.bottom));
+
+        /* DirtyRect is generated for the full buffer resolution. Crop the value
+         * for the hwc_layer_1_t::sourceCrop resolution before sending to HWC.
+         */
+        Rect finalDR;
+        srcCrop.intersect(dirtyRect, &finalDR);
+        getLayer()->dirtyRect = reinterpret_cast<hwc_rect_t const&>(finalDR);
+    }
+#endif
     virtual void setBuffer(const sp<GraphicBuffer>& buffer) {
         if (buffer == 0 || buffer->handle == 0) {
             getLayer()->compositionType = HWC_FRAMEBUFFER;
